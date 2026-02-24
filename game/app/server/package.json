@@ -1,0 +1,23 @@
+{
+  "name": "snowstorm-game-server",
+  "version": "1.0.0",
+  "description": "暴风雪山庄游戏系统 - WebSocket服务器",
+  "main": "websocket-server.js",
+  "scripts": {
+    "start": "node websocket-server.js",
+    "dev": "nodemon websocket-server.js"
+  },
+  "dependencies": {
+    "ws": "^8.14.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "keywords": [
+    "websocket",
+    "game",
+    "multiplayer"
+  ],
+  "author": "",
+  "license": "MIT"
+}
