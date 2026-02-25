@@ -1,258 +1,241 @@
-import type { Location, Floor } from '@/types/game';
+// src/data/locations.ts
+/**
+ * 游戏场景地点定义与相关工具函数
+ */
 
-// 所有地点定义
+// 楼层类型定义
+export type Floor = 'attic' | 'second' | 'first' | 'basement';
+
+// 地点类型定义
+export interface Location {
+  id: string;
+  name: string;
+  floor: Floor;
+  type: 'normal' | 'special' | 'crime' | 'garden';
+  connections: string[];
+  description: string;
+}
+
+// 所有游戏地点数据
 export const locations: Location[] = [
-  // 阁楼
+  // 一楼区域
   {
-    id: 'attic_therapy',
-    name: '理疗室',
-    floor: 'attic',
-    type: 'special',
-    connections: ['attic_main', 'attic_balcony'],
-    description: '消耗1个行动点，获得一个"绷带"'
-  },
-  {
-    id: 'attic_main',
-    name: '阁楼',
-    floor: 'attic',
+    id: 'first_hall',
+    name: '大厅',
+    floor: 'first',
     type: 'normal',
-    connections: ['attic_therapy', 'attic_balcony', 'second_hall'],
-    description: '普通房间'
+    connections: ['first_dining', 'first_kitchen', 'first_stairs'],
+    description: '庄园的主大厅，装饰华丽，是宾客聚集的主要场所'
   },
-  {
-    id: 'attic_balcony',
-    name: '阁楼阳台',
-    floor: 'attic',
-    type: 'special',
-    connections: ['attic_main', 'attic_therapy', 'first_north_garden', 'first_east_garden', 'first_south_garden'],
-    description: '消耗1个行动点和2点生命值，跳入北花园、东花园或南花园。跳落伤害即时结算，若生命值≤2，则无法从此跳落'
-  },
-  
-  // 二楼
-  {
-    id: 'second_storage',
-    name: '储藏室',
-    floor: 'second',
-    type: 'special',
-    connections: ['second_corridor', 'second_control'],
-    description: '消耗1个行动点，获得一个"荧光粉"'
-  },
-  {
-    id: 'second_control',
-    name: '中控室',
-    floor: 'second',
-    type: 'special',
-    connections: ['second_storage', 'second_tool', 'second_corridor'],
-    description: '消耗1个行动点，查看上一轮结算后自己的总分'
-  },
-  {
-    id: 'second_tool',
-    name: '工具间',
-    floor: 'second',
-    type: 'special',
-    connections: ['second_control', 'second_corridor'],
-    description: '消耗1个行动点，获得一个"灭火器"'
-  },
-  {
-    id: 'second_crime',
-    name: '第二案发现场',
-    floor: 'second',
-    type: 'crime',
-    connections: ['second_corridor', 'second_room_a', 'second_room_b'],
-    description: '第一轮凶手可能从该地点开始行动'
-  },
-  {
-    id: 'second_room_a',
-    name: '客房A',
-    floor: 'second',
-    type: 'special',
-    connections: ['second_crime', 'second_corridor', 'second_balcony_east'],
-    description: '每轮从该地点开始行动的玩家，可消耗第1个行动点，连续移动2个地点'
-  },
-  {
-    id: 'second_room_b',
-    name: '客房B',
-    floor: 'second',
-    type: 'special',
-    connections: ['second_crime', 'second_corridor', 'second_balcony_north'],
-    description: '每轮从该地点开始行动的玩家，可消耗第1个行动点，连续移动2个地点'
-  },
-  {
-    id: 'second_hall',
-    name: '二楼大厅',
-    floor: 'second',
-    type: 'normal',
-    connections: ['second_corridor', 'first_hall', 'attic_main'],
-    description: '普通房间'
-  },
-  {
-    id: 'second_corridor',
-    name: '二楼走廊',
-    floor: 'second',
-    type: 'normal',
-    connections: ['second_hall', 'second_storage', 'second_control', 'second_tool', 'second_crime', 'second_room_a', 'second_room_b'],
-    description: '普通房间'
-  },
-  {
-    id: 'second_balcony_north',
-    name: '二楼阳台北侧',
-    floor: 'second',
-    type: 'special',
-    connections: ['second_room_b', 'first_north_garden'],
-    description: '消耗1个行动点和1点生命值，跳入北花园。跳落伤害即时结算，若生命值≤1，则无法从此跳落'
-  },
-  {
-    id: 'second_balcony_east',
-    name: '二楼阳台东侧',
-    floor: 'second',
-    type: 'special',
-    connections: ['second_room_a', 'first_east_garden'],
-    description: '消耗1个行动点和1点生命值，跳入东花园。跳落伤害即时结算，若生命值≤1，则无法从此跳落'
-  },
-  
-  // 一楼
   {
     id: 'first_dining',
     name: '餐厅',
     floor: 'first',
     type: 'normal',
-    connections: ['first_corridor', 'first_living_b'],
-    description: '普通房间'
+    connections: ['first_hall', 'first_kitchen'],
+    description: '可容纳10人的大型餐厅，长桌上摆放着精致的餐具'
   },
   {
-    id: 'first_living_a',
-    name: '起居室A',
-    floor: 'first',
-    type: 'special',
-    connections: ['first_corridor', 'first_hall', 'first_cloakroom'],
-    description: '每轮从该地点开始行动的玩家，可消耗第1个行动点，连续移动2个地点'
-  },
-  {
-    id: 'first_living_b',
-    name: '起居室B',
-    floor: 'first',
-    type: 'special',
-    connections: ['first_corridor', 'first_dining'],
-    description: '每轮从该地点开始行动的玩家，可消耗第1个行动点，连续移动2个地点'
-  },
-  {
-    id: 'first_corridor',
-    name: '一楼走廊',
+    id: 'first_kitchen',
+    name: '厨房',
     floor: 'first',
     type: 'normal',
-    connections: ['first_living_a', 'first_living_b', 'first_dining', 'first_crime', 'first_hall'],
-    description: '普通房间'
+    connections: ['first_dining', 'first_hall'],
+    description: '设备齐全的现代化厨房，有各种厨具和食材'
   },
   {
-    id: 'first_crime',
-    name: '第一案发现场',
-    floor: 'first',
-    type: 'crime',
-    connections: ['first_corridor', 'first_hall'],
-    description: '第一轮凶手可能从该地点开始行动'
-  },
-  {
-    id: 'first_hall',
-    name: '一楼大厅',
+    id: 'first_stairs',
+    name: '一楼楼梯间',
     floor: 'first',
     type: 'normal',
-    connections: ['first_crime', 'first_corridor', 'first_living_a', 'second_hall'],
-    description: '普通房间'
-  },
-  {
-    id: 'first_cloakroom',
-    name: '衣帽间',
-    floor: 'first',
-    type: 'special',
-    connections: ['first_living_a'],
-    description: '消耗1个行动点，获得一个"滑雪套装"'
-  },
-  {
-    id: 'first_north_garden',
-    name: '北花园',
-    floor: 'first',
-    type: 'garden',
-    connections: ['second_balcony_north', 'first_east_garden', 'first_south_garden', 'first_living_a'],
-    description: '由于积雪深厚，玩家需消耗2个行动点才能移动至花园（包括从室内到花园、从花园到花园，但从花园到室内只消耗1个行动点），若剩余1个行动点，则无法移动至花园'
-  },
-  {
-    id: 'first_east_garden',
-    name: '东花园',
-    floor: 'first',
-    type: 'garden',
-    connections: ['second_balcony_east', 'first_north_garden', 'first_south_garden'],
-    description: '由于积雪深厚，玩家需消耗2个行动点才能移动至花园（包括从室内到花园、从花园到花园，但从花园到室内只消耗1个行动点），若剩余1个行动点，则无法移动至花园'
-  },
-  {
-    id: 'first_south_garden',
-    name: '南花园',
-    floor: 'first',
-    type: 'garden',
-    connections: ['first_north_garden', 'first_east_garden'],
-    description: '由于积雪深厚，玩家需消耗2个行动点才能移动至花园（包括从室内到花园、从花园到花园，但从花园到室内只消耗1个行动点），若剩余1个行动点，则无法移动至花园'
+    connections: ['first_hall', 'second_stairs', 'basement_stairs'],
+    description: '连接各楼层的主要楼梯间'
   },
   
-  // 地下室
+  // 二楼区域
   {
-    id: 'basement_north',
-    name: '地下室北走廊',
-    floor: 'basement',
+    id: 'second_stairs',
+    name: '二楼楼梯间',
+    floor: 'second',
     type: 'normal',
-    connections: ['basement_south'],
-    description: '普通房间'
+    connections: ['first_stairs', 'second_bedroom1', 'second_bedroom2', 'second_study'],
+    description: '二楼的楼梯间，通往各个卧室和书房'
   },
   {
-    id: 'basement_south',
-    name: '地下室南走廊',
-    floor: 'basement',
+    id: 'second_bedroom1',
+    name: '1号卧室',
+    floor: 'second',
     type: 'normal',
-    connections: ['basement_north', 'basement_storage'],
-    description: '普通房间'
+    connections: ['second_stairs'],
+    description: '豪华的客房，配有独立卫浴'
   },
   {
-    id: 'basement_storage',
-    name: '杂物间',
+    id: 'second_bedroom2',
+    name: '2号卧室',
+    floor: 'second',
+    type: 'normal',
+    connections: ['second_stairs'],
+    description: '舒适的客房，窗外可以看到花园'
+  },
+  {
+    id: 'second_study',
+    name: '书房',
+    floor: 'second',
+    type: 'special',
+    connections: ['second_stairs'],
+    description: '主人的私人书房，收藏了大量书籍和文件'
+  },
+  
+  // 阁楼区域
+  {
+    id: 'attic_stairs',
+    name: '阁楼楼梯间',
+    floor: 'attic',
+    type: 'normal',
+    connections: ['second_stairs', 'attic_storage'],
+    description: '通往阁楼的狭窄楼梯'
+  },
+  {
+    id: 'attic_storage',
+    name: '阁楼储藏室',
+    floor: 'attic',
+    type: 'special',
+    connections: ['attic_stairs'],
+    description: '堆满杂物的储藏室，很少有人来'
+  },
+  
+  // 地下室区域
+  {
+    id: 'basement_stairs',
+    name: '地下室楼梯间',
+    floor: 'basement',
+    type: 'normal',
+    connections: ['first_stairs', 'basement_cellar', 'basement_workshop'],
+    description: '通往地下室的阴暗楼梯'
+  },
+  {
+    id: 'basement_cellar',
+    name: '酒窖',
+    floor: 'basement',
+    type: 'normal',
+    connections: ['basement_stairs'],
+    description: '存放各种葡萄酒的酒窖，温度恒定'
+  },
+  {
+    id: 'basement_workshop',
+    name: '工坊',
     floor: 'basement',
     type: 'special',
-    connections: ['basement_south'],
-    description: '消耗1个行动点，获得一个"绳索"'
+    connections: ['basement_stairs'],
+    description: '主人的手工工坊，有各种工具和材料'
+  },
+  
+  // 花园区域
+  {
+    id: 'garden_main',
+    name: '主花园',
+    floor: 'first',
+    type: 'garden',
+    connections: ['first_hall', 'garden_rose', 'garden_pool'],
+    description: '庄园的主花园，种植着各种花卉'
+  },
+  {
+    id: 'garden_rose',
+    name: '玫瑰园',
+    floor: 'first',
+    type: 'garden',
+    connections: ['garden_main'],
+    description: '种满各色玫瑰的花园，香气宜人'
+  },
+  {
+    id: 'garden_pool',
+    name: '泳池区',
+    floor: 'first',
+    type: 'garden',
+    connections: ['garden_main'],
+    description: '带有泳池的休闲区，配有躺椅和遮阳伞'
+  },
+  
+  // 犯罪现场
+  {
+    id: 'crime_scene',
+    name: '案发地点',
+    floor: 'second',
+    type: 'crime',
+    connections: ['second_study'],
+    description: '受害者被发现的地方，是案件的核心区域'
   }
 ];
 
-// 获取地点 by ID
+/**
+ * 根据ID获取地点信息
+ * @param id 地点ID
+ * @returns 地点对象或undefined
+ */
 export function getLocationById(id: string): Location | undefined {
-  return locations.find(loc => loc.id === id);
+  return locations.find(location => location.id === id);
 }
 
-// 获取楼层地点
-export function getLocationsByFloor(floor: Floor): Location[] {
-  return locations.filter(loc => loc.floor === floor);
-}
-
-// 获取可连接地点
+/**
+ * 获取某个地点的所有连通地点
+ * @param locationId 地点ID
+ * @returns 连通的地点数组
+ */
 export function getConnectedLocations(locationId: string): Location[] {
   const location = getLocationById(locationId);
   if (!location) return [];
-  return location.connections.map(id => getLocationById(id)).filter((loc): loc is Location => loc !== undefined);
-}
-
-// 检查两个地点是否相邻
-export function areLocationsConnected(loc1: string, loc2: string): boolean {
-  const location = getLocationById(loc1);
-  if (!location) return false;
-  return location.connections.includes(loc2);
-}
-
-// 获取移动消耗
-export function getMoveCost(_from: string, to: string, hasSki: boolean): number {
-  const toLocation = getLocationById(to);
-  if (!toLocation) return 999;
   
-  // 花园特殊规则
+  return location.connections
+    .map(connId => getLocationById(connId))
+    .filter((loc): loc is Location => !!loc);
+}
+
+/**
+ * 计算移动成本
+ * @param from 出发地点ID
+ * @param to 目标地点ID
+ * @param hasSki 是否拥有滑雪套装
+ * @returns 移动所需的行动点数
+ */
+export function getMoveCost(from: string, to: string, hasSki: boolean): number {
+  const fromLocation = getLocationById(from);
+  const toLocation = getLocationById(to);
+  
+  // 无效地点返回极高成本
+  if (!fromLocation || !toLocation) return 999;
+  
+  // 花园特殊移动规则：
+  // 1. 从室内到花园/花园到花园：消耗2点（有滑雪套装则1点）
+  // 2. 从花园到室内：消耗1点（不受滑雪套装影响）
+  
+  if (fromLocation.type === 'garden' && toLocation.type !== 'garden') {
+    return 1; // 从花园到室内固定1点
+  }
+
   if (toLocation.type === 'garden') {
     return hasSki ? 1 : 2;
   }
   
-  // 室内移动消耗1点
+
+  
+  // 普通室内移动固定消耗1点
   return 1;
+}
+
+/**
+ * 获取某一楼层的所有地点
+ * @param floor 楼层
+ * @returns 该楼层的地点数组
+ */
+export function getLocationsByFloor(floor: Floor): Location[] {
+  return locations.filter(location => location.floor === floor);
+}
+
+/**
+ * 获取特定类型的所有地点
+ * @param type 地点类型
+ * @returns 该类型的地点数组
+ */
+export function getLocationsByType(type: Location['type']): Location[] {
+  return locations.filter(location => location.type === type);
 }

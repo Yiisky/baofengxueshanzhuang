@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useWebSocket } from '@/hooks/useWebSocket';
-import type { GameState, Role, ActionStep, ItemType, SettlementInfo } from '@/types/game';
+import type { GameState, Role, ActionStep, ActionStepDetail, ItemType, SettlementInfo } from '@/types/game';
 import { locations } from '@/data/locations';
 
 // 自动获取服务器地址
@@ -37,7 +37,7 @@ const initialState: GameState = {
   fireLocations: [],
   lightLocations: [],
   currentPlayerIndex: 0,
-  votes: new Map(),
+  votes: {},
   voteRecords: [],
   tradeRequests: [],
   settings: {
@@ -251,13 +251,13 @@ case 'ERROR':
     });
   }, [sendMessage]);
 
-  const addActionStep = useCallback((_playerId: string, step: ActionStep) => {
-    sendMessage({
-      type: 'PLAYER_ACTION',
-      action: 'MOVE',
-      locationId: step.locationId
-    });
-  }, [sendMessage]);
+const addActionStep = useCallback((_playerId: string, step: ActionStepDetail) => {
+  sendMessage({
+    type: 'PLAYER_ACTION',
+    action: 'MOVE',
+    locationId: step.locationId
+  });
+}, [sendMessage]);
 
   const clearActionLine = useCallback((_playerId: string) => {
     console.log('[Store] 清除行动线需要重新连接');
@@ -498,7 +498,7 @@ case 'ERROR':
       }
     }
 
-    globalState.votes.forEach((targetId, voterId) => {
+    Object.entries(globalState.votes || {}).forEach(([voterId, targetId]) => {
       const killer = players.find(p => p.role === 'killer');
       settlement.voteResults.push({
         voterId,

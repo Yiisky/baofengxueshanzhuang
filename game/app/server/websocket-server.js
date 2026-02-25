@@ -185,7 +185,7 @@ function getSanitizedGameState(room, requesterId) {
         actionPoints: p.actionPoints,
         items: [],
         actionLine: [],
-        visitedLocations: p.visitedLocations,
+        visitedLocations: p.visitedLocations || [],
         isExposed: p.isExposed
       };
     }
@@ -384,39 +384,83 @@ case 'JOIN_ROOM': {
         }
         
         case 'PLAYER_ACTION': {
-          if (!currentRoom) {
-            sendToPlayer(ws, { type: 'ERROR', message: '未加入房间' });
-            break;
-          }
-          
-          const player = currentRoom.gameState.players.find(p => p.id === currentPlayerId);
-          if (!player) {
-            sendToPlayer(ws, { type: 'ERROR', message: '玩家不存在' });
-            break;
-          }
-          
-          if (message.action === 'MOVE') {
-            player.currentLocation = message.locationId;
-            if (!player.visitedLocations.includes(message.locationId)) {
-              player.visitedLocations.push(message.locationId);
-            }
-            
-            player.actionLine.push({
-              step: player.actionLine.length + 1,
-              locationId: message.locationId,
-              action: 'move'
-            });
-          }
-          
-          broadcast(currentRoom, {
-            type: 'PLAYER_ACTION_DONE',
-            playerId: currentPlayerId,
-            action: message.action,
-            state: getSanitizedGameState(currentRoom, currentPlayerId)
-          });
-          
-          break;
-        }
+  if (!currentRoom) {
+    sendToPlayer(ws, { type: 'ERROR', message: '未加入房间' });
+    break;
+  }
+  
+  const player = currentRoom.gameState.players.find(p => p.id === currentPlayerId);
+  if (!player) {
+    sendToPlayer(ws, { type: 'ERROR', message: '玩家不存在' });
+    break;
+  }
+  
+  if (message.action === 'MOVE') {
+    const targetLocation = message.locationId;
+    const cost = message.cost || 1;
+    
+    // 检查行动点
+    if (player.actionPoints < cost) {
+      sendToPlayer(ws, { type: 'ERROR', message: '行动点不足' });
+      break;
+    }
+    
+    // 扣除行动点
+    player.actionPoints -= cost;
+    player.currentLocation = targetLocation;
+    
+    // 记录访问
+    if (!player.visitedLocations.includes(targetLocation)) {
+      player.visitedLocations.push(targetLocation);
+    }
+    
+    // 记录行动线
+    player.actionLine.push({
+      step: player.actionLine.length + 1,
+      locationId: targetLocation,
+      action: 'move',
+      cost: cost
+    });
+    
+    // 自动获取房间道具（如果有）
+    const loc = locations.find(l => l.id === targetLocation);
+    if (loc && loc.function && loc.function.type === 'get_item') {
+      // 检查是否已拥有该道具
+      if (!player.items.includes(loc.function.item)) {
+        player.items.push(loc.function.item);
+        // 发送道具获得通知
+        sendToPlayer(ws, {
+          type: 'NOTIFICATION',
+          message: `获得道具: ${loc.function.item}`,
+          notificationType: 'success'
+        });
+      }
+    }
+    
+    // 处理跳落伤害
+    if (loc && loc.function && loc.function.type === 'jump') {
+      const healthCost = loc.function.healthCost || 0;
+      if (healthCost > 0) {
+        player.health -= healthCost;
+        sendToPlayer(ws, {
+          type: 'NOTIFICATION',
+          message: `跳落受到 ${healthCost} 点伤害`,
+          notificationType: 'warning'
+        });
+      }
+    }
+  }
+  
+  broadcast(currentRoom, {
+    type: 'PLAYER_ACTION_DONE',
+    playerId: currentPlayerId,
+    action: message.action,
+    state: getSanitizedGameState(currentRoom, currentPlayerId)
+  });
+  
+  break;
+}
+
         
         case 'VOTE': {
           if (!currentRoom) {
