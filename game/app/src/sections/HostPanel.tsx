@@ -1,50 +1,116 @@
-import { useState } from 'react';
+// src/sections/HostPanel.tsx
+// 修改：支持历史数据传递和更好的重连体验
+
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useWebSocketStore } from '@/store/websocketStore';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { 
-  Dialog, 
-  DialogContent, 
-  DialogHeader, 
-  DialogTitle
-} from '@/components/ui/dialog';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { 
-  Heart, 
-  MapPin, 
-  ChevronRight,
-  Flame,
-  Lightbulb,
+  Trophy,
   Play,
   RotateCcw,
-  Skull
+  ChevronRight,
+  AlertCircle,
+  Users,
+  Wifi
 } from 'lucide-react';
-import { getLocationById, getLocationsByFloor } from '@/data/locations';
-import { getRoleIcon, getRoleName, getCampColor } from '@/data/roles';
 import { cn } from '@/lib/utils';
-import type { Player, Role } from '@/types/game';
+
+// 导入组件
+import { PlayerAdminPanel } from '@/components/host/PlayerAdminPanel';
+import { GameReviewDialog } from '@/components/host/GameReviewDialog';
+import { RoundTabsPanel } from '@/components/host/RoundTabsPanel';
+import { PlayerStatusCards } from '@/components/host/PlayerStatusCards';
+import { RoleAssignmentPanel } from '@/components/host/RoleAssignmentPanel';
+import type { Player, RoleType, GameState } from '@/types/game';
+import type { RoundHistory } from '@/types/roundTabs';
+
+// 本地存储键名
+const STORAGE_KEYS = {
+  HOST_PLAYER_ID: 'hostPlayerId',
+  ROOM_CODE: 'roomCode',
+  IS_HOST: 'isHost'
+};
+
+// WebSocket 消息数据类型
+interface WsMessageData {
+  type: string;
+  serverRestarted?: boolean;
+  isHost?: boolean;
+  hostPlayerId?: string;
+  roomCode?: string;
+  roundHistories?: RoundHistory[];
+  shouldReset?: boolean;
+  message?: string;
+  playerId?: string;
+  role?: RoleType;
+}
+
+// src/sections/HostPanel.tsx
 
 export function HostPanel() {
+  const store = useWebSocketStore();
+  
+  // 使用 useState 和 useEffect 强制监听 players 变化
+  const [displayPlayers, setDisplayPlayers] = useState<Player[]>([]);
+  // ✅ 添加：定义 lastUpdateTime state（如果你需要它）
+  const [, setLastUpdateTime] = useState<number>(Date.now());
+  
   const { 
     round = 1, 
     phase = 'config', 
-    players = [], 
-    fireLocations = [], 
-    lightLocations = [],
+    players = [],
     roomCode = '',
-    isHost,
-    nextPhase,
-    resetGame,
-    setPlayerRole,
-    startGame,
-    calculateSettlement
-  } = useWebSocketStore();
+    myPlayerId,
+    isConnected = false,
+    myHostId,
+    resetGame,  // ✅ 确保从 store 解构
+    sendMessage,  // ✅ 确保从 store 解构
+    roundHistories: storeHistories  // ✅ 重命名获取
+  } = store;
 
-  const [activeTab, setActiveTab] = useState('players');
+  // 关键修复：确保 players 变化时更新 displayPlayers，添加更严格的检查
+  useEffect(() => {
+    console.log('[HostPanel] players 变化:', players?.length, '列表:', players?.map((p: Player) => ({name: p.name, number: p.number, role: p.role})));
+    
+    if (Array.isArray(players)) {
+      // 深拷贝确保 React 检测到变化
+      const newPlayers = players.map(p => ({
+        ...p,
+        // 确保 number 字段有效
+        number: (p as any).number || parseInt(p.name?.match(/(\d+)号玩家/)?.[1] || '0') || 0,
+      }));
+      setDisplayPlayers(newPlayers);
+      setLastUpdateTime(Date.now());
+    }
+  }, [players, round, phase]); // 添加 round 和 phase 作为依赖，确保阶段切换时更新
+
+  // 强制刷新机制
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (Array.isArray(store.players) && store.players.length !== displayPlayers.length) {
+        console.log('[HostPanel] 检测到玩家数量不匹配，强制刷新');
+        setDisplayPlayers([...store.players]);
+        setLastUpdateTime(Date.now());
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [store.players, displayPlayers.length]);
+
+  const isHost = !!myHostId && !!myPlayerId && myHostId === myPlayerId;
+
+  // 修复：使用 displayPlayers 确保实时更新
+  const allPlayers = displayPlayers.length > 0 ? displayPlayers : (store as any).players || [];
+  console.log('[HostPanel] allPlayers:', allPlayers.length, allPlayers.map((p: Player) => p.name));
+
+  const [showReconnectDialog, setShowReconnectDialog] = useState<boolean>(false);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [isReconnecting, setIsReconnecting] = useState<boolean>(false);
+  const [showPlayerAdmin, setShowPlayerAdmin] = useState<boolean>(false);
+  const [showGameReview, setShowGameReview] = useState<boolean>(false);
   const [selectedPlayer, setSelectedPlayer] = useState<Player | null>(null);
-  const [showSettlement, setShowSettlement] = useState(false);
+  
+  // 本地历史数据备份
+  const [localHistories, setLocalHistories] = useState<RoundHistory[]>([]);
 
   const phaseNames: Record<string, string> = {
     lobby: '等待开始',
@@ -55,688 +121,473 @@ export function HostPanel() {
     ended: '游戏结束'
   };
 
-  // 包装设置身份函数，添加权限检查
-  const handleSetRole = (playerId: string, role: Role) => {
+  // 合并服务器和本地历史数据
+  const effectiveHistories = storeHistories || localHistories;
+
+  // 重连逻辑优化
+  const hasAttemptedReconnect = useRef(false);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasInitialChecked = useRef(false);
+
+  const attemptReconnectHost = useCallback(async () => {
+    // 防止重复重连
+    if (hasAttemptedReconnect.current) {
+      console.log('[HostPanel] 已经尝试过重连，跳过');
+      return;
+    }
+    
+    const savedHostId = localStorage.getItem(STORAGE_KEYS.HOST_PLAYER_ID);
+    const savedRoomCode = localStorage.getItem(STORAGE_KEYS.ROOM_CODE);
+    const savedIsHost = localStorage.getItem(STORAGE_KEYS.IS_HOST) === 'true';
+
+    console.log('[HostPanel] 尝试重连:', { savedHostId, savedRoomCode, savedIsHost });
+
+    if (savedIsHost && savedHostId && savedRoomCode && sendMessage) {
+      hasAttemptedReconnect.current = true;
+      setIsReconnecting(true);
+      
+      try {
+        sendMessage({ 
+          type: 'RECONNECT_HOST', 
+          roomCode: savedRoomCode, 
+          hostPlayerId: savedHostId 
+        });
+        
+        // 清除之前的定时器
+        if (reconnectTimeoutRef.current) {
+          clearTimeout(reconnectTimeoutRef.current);
+        }
+        
+        // 等待响应 - 延长等待时间到5秒
+        reconnectTimeoutRef.current = setTimeout(() => {
+          // 检查是否仍然是主持人（通过 store 中的状态）
+          const currentHostId = store.myHostId;
+          const currentPlayerId = store.myPlayerId;
+          
+          console.log('[HostPanel] 重连检查:', { currentHostId, currentPlayerId, isHost: currentHostId === currentPlayerId });
+          
+          if (currentHostId !== currentPlayerId) {
+            // 重连失败
+            console.log('[HostPanel] 重连失败，清除状态');
+            clearHostStorage();
+            setConnectionError('房间已过期或不存在，请创建新房间');
+            setShowReconnectDialog(true);
+          } else {
+            console.log('[HostPanel] 重连成功确认');
+          }
+          setIsReconnecting(false);
+        }, 5000);
+      } catch (error) {
+        console.error('[HostPanel] 重连出错:', error);
+        clearHostStorage();
+        setIsReconnecting(false);
+      }
+    } else {
+      console.log('[HostPanel] 没有保存的主持人信息，不需要重连');
+    }
+  }, [sendMessage, store.myHostId, store.myPlayerId]);
+
+  // 清理函数
+  useEffect(() => {
+    return () => {
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const clearHostStorage = useCallback(() => {
+    localStorage.removeItem(STORAGE_KEYS.HOST_PLAYER_ID);
+    localStorage.removeItem(STORAGE_KEYS.ROOM_CODE);
+    localStorage.removeItem(STORAGE_KEYS.IS_HOST);
+  }, []);
+
+  const saveHostState = useCallback((hostPlayerId: string, roomCode: string) => {
+    localStorage.setItem(STORAGE_KEYS.HOST_PLAYER_ID, hostPlayerId);
+    localStorage.setItem(STORAGE_KEYS.ROOM_CODE, roomCode);
+    localStorage.setItem(STORAGE_KEYS.IS_HOST, 'true');
+  }, []);
+
+  // 监听消息处理重连和错误
+  useEffect(() => {
+    if (!isConnected) return;
+    
+    const handleMessage = (event: MessageEvent) => {
+      try {
+        const data = JSON.parse(event.data) as WsMessageData;
+        
+        // 服务器重启后重连
+        if (data.type === 'CONNECTED' && data.serverRestarted) {
+          console.log('[HostPanel] 检测到服务器重启，尝试重连');
+          // 重置重连标记，允许再次重连
+          hasAttemptedReconnect.current = false;
+          attemptReconnectHost();
+        }
+        
+        // 创建房间成功，保存状态
+        if (data.type === 'ROOM_CREATED' && data.isHost && data.hostPlayerId && data.roomCode) {
+          console.log('[HostPanel] 房间创建成功，保存状态:', data.hostPlayerId, data.roomCode);
+          saveHostState(data.hostPlayerId, data.roomCode);
+        }
+        
+        // 重连成功
+        if (data.type === 'RECONNECT_HOST_SUCCESS') {
+          console.log('[HostPanel] 收到重连成功消息');
+          // 保存历史数据
+          if (data.roundHistories) {
+            setLocalHistories(data.roundHistories);
+          }
+          // 清除重连状态
+          setIsReconnecting(false);
+          if (reconnectTimeoutRef.current) {
+            clearTimeout(reconnectTimeoutRef.current);
+          }
+        }
+        
+        // 重连失败或错误
+        if (data.type === 'ERROR' && data.shouldReset) {
+          console.log('[HostPanel] 收到错误，需要重置:', data.message);
+          clearHostStorage();
+          setConnectionError(data.message || '连接已过期');
+          setShowReconnectDialog(true);
+          setIsReconnecting(false);
+        }
+        
+        // 房间重置
+        if (data.type === 'ROOM_RESET' || data.type === 'RESET_SUCCESS') {
+          console.log('[HostPanel] 房间已重置');
+          clearHostStorage();
+          window.location.reload();
+        }
+      } catch (error) {
+        console.error('Message handling error:', error);
+      }
+    };
+    
+    // 使用 store 中的 WebSocket 或全局 WebSocket
+    const ws = (store as any).ws || (window as unknown as { gameWebSocket?: WebSocket }).gameWebSocket;
+    if (ws) {
+      ws.addEventListener('message', handleMessage);
+      return () => ws.removeEventListener('message', handleMessage);
+    }
+  }, [isConnected, attemptReconnectHost, saveHostState, clearHostStorage, store]);
+
+  // 初始重连检查
+  useEffect(() => {
+    if (hasInitialChecked.current) return;
+    hasInitialChecked.current = true;
+    
+    // 页面加载时检查是否需要重连
+    const savedHostId = localStorage.getItem(STORAGE_KEYS.HOST_PLAYER_ID);
+    const savedRoomCode = localStorage.getItem(STORAGE_KEYS.ROOM_CODE);
+    
+    console.log('[HostPanel] 初始检查:', { savedHostId, savedRoomCode, isHost, isConnected });
+    
+    // 如果已经有主持人身份，不需要重连
+    if (isHost) {
+      console.log('[HostPanel] 已经是主持人，不需要重连');
+      return;
+    }
+    
+    // 如果有保存的主持人信息且已连接，尝试重连
+    if (savedHostId && savedRoomCode && isConnected) {
+      // 延迟执行，确保 WebSocket 完全就绪
+      const timer = setTimeout(() => {
+        attemptReconnectHost();
+      }, 1000);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [isHost, isConnected, attemptReconnectHost]);
+
+  // 操作函数
+const handleStartGame = () => {
+  if (!isHost) {
+    alert('只有主持人可以开始游戏');
+    return;
+  }
+  
+  const unassignedPlayers = players.filter((p: Player) => !p.role || p.role === 'unknown');
+  if (unassignedPlayers.length > 0) {
+    const names = unassignedPlayers.map((p: Player) => p.name).join(', ');
+    if (!confirm(`以下玩家尚未分配身份：${names}\n\n是否继续开始游戏？`)) return;
+  }
+  
+  // 关键修复：优先使用 store 中的 myHostId，它应该是最新的
+  // 其次使用 localStorage，最后使用 myPlayerId
+  let effectiveHostId = myHostId || localStorage.getItem(STORAGE_KEYS.HOST_PLAYER_ID) || myPlayerId;
+  const effectiveRoomCode = roomCode || localStorage.getItem(STORAGE_KEYS.ROOM_CODE);
+  
+  // 关键修复：确保 ID 没有被截断（检查长度）
+  if (effectiveHostId && effectiveHostId.length < 10) {
+    console.warn('[HostPanel] hostId 可能不完整，尝试从 store 获取:', { 
+      currentId: effectiveHostId, 
+      storeMyHostId: myHostId,
+      storeMyPlayerId: myPlayerId 
+    });
+    // 如果太短，优先使用 store 的值
+    effectiveHostId = myHostId || myPlayerId || effectiveHostId;
+  }
+  
+  console.log('[HostPanel] 开始游戏:', { 
+    hostPlayerId: effectiveHostId, 
+    hostIdLength: effectiveHostId?.length,
+    roomCode: effectiveRoomCode 
+  });
+  
+  if (!effectiveHostId) {
+    alert('错误：无法获取主持人ID，请刷新页面重试');
+    return;
+  }
+  
+  if (!effectiveRoomCode) {
+    alert('错误：无法获取房间号，请刷新页面重试');
+    return;
+  }
+  
+  if (sendMessage) {
+    sendMessage({ 
+      type: 'START_GAME', 
+      hostPlayerId: effectiveHostId,
+      roomCode: effectiveRoomCode
+    });
+  } else {
+    alert('错误：无法连接到服务器');
+  }
+};
+  const handleNextPhase = () => {
+    const hostPlayerId = localStorage.getItem(STORAGE_KEYS.HOST_PLAYER_ID);
+    if (sendMessage) {
+      sendMessage({ type: 'NEXT_PHASE', hostPlayerId });
+    }
+  };
+
+  const handleResetGame = () => {
+    if (!isHost) return alert('只有主持人可以重置游戏');
+    if (!confirm('确定要重置房间吗？所有玩家将被断开连接。')) return;
+    
+    const hostPlayerId = localStorage.getItem(STORAGE_KEYS.HOST_PLAYER_ID);
+    if (sendMessage) {
+      sendMessage({ type: 'RESET_ROOM', hostPlayerId });
+    }
+    clearHostStorage();
+    if (resetGame) {
+      resetGame();
+    }
+  };
+
+  const handleForceReset = () => {
+    clearHostStorage();
+    if (sendMessage) {
+      sendMessage({ type: 'DISCONNECT' });
+    }
+    window.location.reload();
+  };
+
+  const handlePlayerClick = (player: Player) => {
+    setSelectedPlayer(player);
+    setShowPlayerAdmin(true);
+  };
+
+  const handleSetRole = (playerId: string, role: RoleType) => {
     if (!isHost) {
       alert('只有主持人可以设置身份');
-      console.error('[HostPanel] 权限拒绝：非主持人尝试设置身份');
       return;
     }
-    setPlayerRole(playerId, role);
-  };
-
-  // 包装开始游戏函数，添加权限检查
-  const handleStartGame = () => {
-    if (!isHost) {
-      alert('只有主持人可以开始游戏');
-      console.error('[HostPanel] 权限拒绝：非主持人尝试开始游戏');
-      return;
+    const hostPlayerId = localStorage.getItem(STORAGE_KEYS.HOST_PLAYER_ID);
+    if (sendMessage) {
+      sendMessage({
+        type: 'SET_ROLE',
+        playerId: playerId,
+        role: role,
+        hostPlayerId: hostPlayerId
+      });
     }
-    startGame();
   };
 
-  const handleNextPhase = () => {
-    nextPhase();
+  const handleClearAll = () => {
+    players.forEach((p: Player) => {
+      if (p.role && p.role !== 'unknown') {
+        handleSetRole(p.id, 'unknown');
+      }
+    });
   };
+
+  // 重连中显示
+  if (isReconnecting) return (
+    <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center p-4">
+      <div className="bg-[#1a1a1a] border border-[#d4a853] rounded-lg p-8 text-center">
+        <Wifi className="w-12 h-12 text-[#d4a853] mx-auto mb-4 animate-pulse" />
+        <h2 className="text-[#d4a853] text-xl mb-4">正在重新连接主持人...</h2>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#d4a853] mx-auto" />
+        <p className="text-[#aaaaaa] mt-4 text-sm">房间号: {localStorage.getItem(STORAGE_KEYS.ROOM_CODE)}</p>
+      </div>
+    </div>
+  );
+
+  // 重连失败显示
+  if (showReconnectDialog) return (
+    <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center p-4">
+      <div className="bg-[#1a1a1a] border border-[#d4a853] rounded-lg p-8 max-w-md">
+        <h2 className="text-[#d4a853] text-xl mb-4 flex items-center gap-2">
+          <AlertCircle className="w-6 h-6" /> 连接已断开
+        </h2>
+        <p className="text-[#aaaaaa] mb-6">{connectionError || '与服务器连接已断开'}</p>
+        <Button onClick={handleForceReset} className="w-full bg-[#d4a853] text-[#0a0a0a]">
+          返回首页重新创建房间
+        </Button>
+      </div>
+    </div>
+  );
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] p-4">
+    <div className="min-h-screen bg-[#0a0a0a] flex flex-col">
       {/* 顶部状态栏 */}
-      <header className="flex items-center justify-between mb-4 p-4 bg-[#1a1a1a] border border-[#d4a853] rounded-lg">
-        <div className="flex items-center gap-4">
-          {/* 房间号 - 最左边 */}
-          <div className="flex items-center gap-1">
-            <span className="text-[#aaaaaa] text-sm">房间:</span>
-            <span className="text-lg font-bold text-[#d4a853] tracking-wider">
-              {roomCode || '-'}
-            </span>
-          </div>
-          
-          {/* 分隔线 */}
-          <div className="w-px h-6 bg-[#444]" />
-          
-          {/* 轮次 */}
-          <div className="text-xl font-bold text-[#d4a853]">
-            第 {round} 轮
-          </div>
-          
-          {/* 分隔线 */}
-          <div className="w-px h-6 bg-[#444]" />
-          
-          {/* 阶段 */}
-          <div className="text-base text-[#f5f5f5]">
-            {phaseNames[phase] || phase}
-          </div>
-          
-          {/* 分隔线 */}
-          <div className="w-px h-6 bg-[#444]" />
-          
-          {/* 状态图标 */}
-          <div className="flex items-center gap-2">
-            <Badge variant="outline" className="border-[#c9302c] text-[#c9302c] text-xs">
-              <Flame className="w-3 h-3 mr-1" />
-              {fireLocations.length}
-            </Badge>
-            <Badge variant="outline" className="border-[#5bc0de] text-[#5bc0de] text-xs">
-              <Lightbulb className="w-3 h-3 mr-1" />
-              {lightLocations.length}
-            </Badge>
-          </div>
+      <header className="sticky top-0 z-50 bg-[#1a1a1a] border-b border-[#333] shadow-lg">
+        <div className="max-w-7xl mx-auto px-4 py-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-6">
+              <div className="flex items-center gap-2">
+                <span className="text-[#666] text-sm">房间号</span>
+                <span className="text-2xl font-bold text-[#d4a853] tracking-wider font-mono">
+                  {roomCode || '----'}
+                </span>
+              </div>
+              
+              <div className="w-px h-8 bg-[#444]" />
+              
+              <div className="flex items-center gap-2">
+                <span className="text-[#666] text-sm">当前轮次</span>
+                <span className="text-xl font-bold text-[#d4a853]">第 {round} 轮</span>
+              </div>
+              
+              <div className="w-px h-8 bg-[#444]" />
+              
+              <div className="flex items-center gap-2">
+                <span className="text-[#666] text-sm">阶段</span>
+                <span className="text-lg text-[#f5f5f5]">{phaseNames[phase] || phase}</span>
+              </div>
+              
+              {/* 连接状态指示 */}
+              <div className={cn(
+                "flex items-center gap-1 text-xs px-2 py-1 rounded",
+                isConnected ? "bg-[#2ca02c]/20 text-[#2ca02c]" : "bg-[#c9302c]/20 text-[#c9302c]"
+              )}>
+                <div className={cn("w-2 h-2 rounded-full", isConnected ? "bg-[#2ca02c]" : "bg-[#c9302c]")} />
+                {isConnected ? '已连接' : '未连接'}
+              </div>
+            </div>
 
-          {/* 主持人标识 */}
-          {isHost && (
-            <Badge className="bg-[#d4a853] text-[#0a0a0a] ml-2">
-              👑 主持人
-            </Badge>
-          )}
-        </div>
-        
-        {/* 右侧按钮 */}
-        <div className="flex items-center gap-2">
-          {phase === 'config' && (
-            <Button 
-              onClick={handleStartGame}
-              disabled={!isHost}
-              className="bg-[#2ca02c] text-white hover:bg-[#259025] h-9 disabled:opacity-50"
-            >
-              <Play className="w-4 h-4 mr-1" />
-              开始游戏
-            </Button>
-          )}
-          {phase !== 'config' && phase !== 'lobby' && phase !== 'ended' && (
-            <>
-              {phase === 'settlement' && (
+            {/* 操作按钮 */}
+            <div className="flex items-center gap-2">
+              <Button 
+                onClick={() => setShowGameReview(true)} 
+                className="bg-[#5bc0de] text-white hover:bg-[#4aa0bd]"
+              >
+                <Trophy className="w-4 h-4 mr-1" /> 复盘结算
+              </Button>
+
+              {phase === 'config' && (
                 <Button 
-                  variant="outline"
-                  onClick={() => setShowSettlement(true)}
-                  className="border-[#d4a853] text-[#d4a853] h-9"
+                  onClick={handleStartGame} 
+                  disabled={!isHost || players.length < 1}
+                  className="bg-[#2ca02c] text-white hover:bg-[#259025] disabled:opacity-50"
                 >
-                  查看结算
+                  <Play className="w-4 h-4 mr-1" /> 开始游戏
                 </Button>
               )}
+              
+              {phase !== 'config' && phase !== 'lobby' && phase !== 'ended' && (
+                <Button 
+                  onClick={handleNextPhase} 
+                  disabled={!isHost} 
+                  className="bg-[#d4a853] text-[#0a0a0a] hover:bg-[#c49a4b] disabled:opacity-50"
+                >
+                  {phase === 'settlement' && round >= 5 ? '结束游戏' : '下一阶段'}
+                  <ChevronRight className="w-4 h-4 ml-1" />
+                </Button>
+              )}
+
+              {phase === 'ended' && (
+                <Button 
+                  onClick={() => setShowGameReview(true)} 
+                  className="bg-[#d4a853] text-[#0a0a0a] hover:bg-[#c49a4b]"
+                >
+                  <Trophy className="w-4 h-4 mr-1" /> 复盘结算
+                </Button>
+              )}
+              
               <Button 
-                onClick={handleNextPhase}
-                className="bg-[#d4a853] text-[#0a0a0a] hover:bg-[#c49a4b] h-9"
+                variant="outline" 
+                onClick={handleResetGame} 
+                disabled={!isHost}
+                className="border-[#c9302c] text-[#c9302c] hover:bg-[#c9302c]/10 disabled:opacity-50"
               >
-                {phase === 'settlement' && round >= 5 ? '结束游戏' : '下一阶段'}
-                <ChevronRight className="w-4 h-4 ml-1" />
+                <RotateCcw className="w-4 h-4 mr-1" /> 重置房间
               </Button>
-            </>
-          )}
-          <Button 
-            variant="outline" 
-            onClick={resetGame}
-            className="border-[#444] text-[#aaaaaa] h-9"
-          >
-            <RotateCcw className="w-4 h-4 mr-1" />
-            重置
-          </Button>
+            </div>
+          </div>
         </div>
       </header>
 
       {/* 主内容区 */}
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="w-full bg-[#1a1a1a] border border-[#444]">
-          <TabsTrigger value="players" className="flex-1 data-[state=active]:bg-[#d4a853] data-[state=active]:text-[#0a0a0a]">
-            <Heart className="w-4 h-4 mr-1" />
-            玩家管理
-          </TabsTrigger>
-          <TabsTrigger value="map" className="flex-1 data-[state=active]:bg-[#d4a853] data-[state=active]:text-[#0a0a0a]">
-            <MapPin className="w-4 h-4 mr-1" />
-            地图
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="players" className="mt-4">
-          <PlayerManagement 
-            players={players}
-            selectedPlayer={selectedPlayer}
-            onSelectPlayer={setSelectedPlayer}
-            onSetRole={handleSetRole}
-            phase={phase}
-            isHost={isHost}
-          />
-        </TabsContent>
-
-        <TabsContent value="map" className="mt-4">
-          <HostMapView 
-            fireLocations={fireLocations}
-            lightLocations={lightLocations}
-            players={players}
-          />
-        </TabsContent>
-      </Tabs>
-
-      {/* 结算弹窗 */}
-      <Dialog open={showSettlement} onOpenChange={setShowSettlement}>
-        <DialogContent className="bg-[#1a1a1a] border-[#d4a853] max-w-4xl max-h-[90vh] overflow-auto">
-          <DialogHeader>
-            <DialogTitle className="text-[#d4a853]">第{round}轮结算详情</DialogTitle>
-          </DialogHeader>
-          <div className="grid grid-cols-2 gap-4">
-            <SettlementDetail settlement={calculateSettlement()} players={players} />
-            <PublicAnnouncement settlement={calculateSettlement()} players={players} round={round} />
-          </div>
-        </DialogContent>
-      </Dialog>
-    </div>
-  );
-}
-
-interface PlayerManagementProps {
-  players: Player[];
-  selectedPlayer: Player | null;
-  onSelectPlayer: (player: Player) => void;
-  onSetRole: (playerId: string, role: Role) => void;
-  phase: string;
-  isHost: boolean;
-}
-
-function PlayerManagement({ players, selectedPlayer, onSelectPlayer, onSetRole, phase, isHost }: PlayerManagementProps) {
-  const roles: Role[] = ['killer', 'accomplice', 'detective', 'engineer', 'hacker', 'doctor', 'fan'];
-
-  return (
-    <div className="grid grid-cols-12 gap-4">
-      <div className="col-span-7">
-        <Card className="bg-[#1a1a1a] border-[#d4a853]">
-          <CardHeader>
-            <CardTitle className="text-[#d4a853]">玩家列表 ({players.length}人)</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-2 gap-2">
-              {players.map((player, index) => (
-                <PlayerCard 
-                  key={player.id}
-                  player={player}
-                  index={index}
-                  isSelected={selectedPlayer?.id === player.id}
-                  onClick={() => onSelectPlayer(player)}
-                />
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className="col-span-5">
-        {selectedPlayer ? (
-          <PlayerDetail 
-            player={selectedPlayer}
-            phase={phase}
-            roles={roles}
-            onSetRole={onSetRole}
-            isHost={isHost}
-          />
+      <main className="flex-1 max-w-7xl mx-auto w-full px-4 py-4 space-y-6">
+        {phase === 'config' ? (
+          // 配置阶段：显示身份分配面板
+          <RoleAssignmentPanel
+  players={displayPlayers}
+  onAssignRole={handleSetRole}
+  onBatchAssign={(assignments: Record<string, RoleType>) => {
+    Object.entries(assignments).forEach(([playerId, role]) => {
+      handleSetRole(playerId, role);
+    });
+  }}
+  onClearAll={handleClearAll}
+  isHost={isHost}
+/>
         ) : (
-          <Card className="bg-[#1a1a1a] border-[#444]">
-            <CardContent className="p-6 text-center text-[#aaaaaa]">
-              选择一名玩家查看详情
-            </CardContent>
-          </Card>
-        )}
-      </div>
-    </div>
-  );
-}
-
-interface PlayerCardProps {
-  player: Player;
-  index: number;
-  isSelected: boolean;
-  onClick: () => void;
-}
-
-function PlayerCard({ player, index, isSelected, onClick }: PlayerCardProps) {
-  const healthColor = player.health > 0 ? 'text-[#c9302c]' : 'text-[#444]';
-  
-  return (
-    <div
-      onClick={onClick}
-      className={cn(
-        "p-3 rounded-lg cursor-pointer transition-all",
-        "border border-[#444] hover:border-[#d4a853]",
-        isSelected && "border-[#d4a853] bg-[#2a2a2a]",
-        !player.isAlive && "opacity-50"
-      )}
-    >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-[#d4a853] font-bold">{index + 1}</span>
-          <span className="text-[#f5f5f5]">{player.name}</span>
-        </div>
-        <span className="text-lg">{getRoleIcon(player.role)}</span>
-      </div>
-      <div className="flex items-center justify-between mt-2 text-sm">
-        <div className="flex items-center gap-1">
-          <Heart className={cn("w-4 h-4", healthColor)} />
-          <span className={healthColor}>
-            {player.health}/{player.maxHealth}
-          </span>
-        </div>
-        <div className="text-[#d4a853]">{player.score}分</div>
-      </div>
-      <div className="mt-1 text-xs text-[#8b7355]">
-        {getRoleName(player.role)}
-      </div>
-    </div>
-  );
-}
-
-interface PlayerDetailProps {
-  player: Player;
-  phase: string;
-  roles: Role[];
-  onSetRole: (playerId: string, role: Role) => void;
-  isHost: boolean;
-}
-
-function PlayerDetail({ player, phase, roles, onSetRole, isHost }: PlayerDetailProps) {
-  const campText = 
-    player.camp === 'killer' ? '凶手阵营' :
-    player.camp === 'detective' ? '侦探阵营' : '中立';
-  
-  const locationName = getLocationById(player.currentLocation)?.name || '未设置';
-
-  return (
-    <Card className="bg-[#1a1a1a] border-[#d4a853]">
-      <CardHeader>
-        <CardTitle className="text-[#d4a853]">{player.name}</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {phase === 'config' && (
-          <div>
-            <label className="text-[#aaaaaa] text-sm mb-2 block">
-              设置身份 {!isHost && <span className="text-[#c9302c]">(仅主持人可操作)</span>}
-            </label>
-            <Select 
-              value={player.role} 
-              onValueChange={(value) => onSetRole(player.id, value as Role)}
-              disabled={!isHost}
-            >
-              <SelectTrigger className="bg-[#2a2a2a] border-[#444] text-[#f5f5f5] disabled:opacity-50">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="bg-[#2a2a2a] border-[#444]">
-                {roles.map((role) => (
-                  <SelectItem 
-                    key={role} 
-                    value={role}
-                    className="text-[#f5f5f5]"
-                  >
-                    {getRoleIcon(role)} {getRoleName(role)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
-
-        <div className="space-y-2">
-          <div className="flex justify-between">
-            <span className="text-[#aaaaaa]">阵营</span>
-            <span style={{ color: getCampColor(player.camp) }}>{campText}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-[#aaaaaa]">生命值</span>
-            <span className="text-[#f5f5f5]">{player.health}/{player.maxHealth}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-[#aaaaaa]">当前位置</span>
-            <span className="text-[#f5f5f5]">{locationName}</span>
-          </div>
-        </div>
-
-        <div>
-          <span className="text-[#aaaaaa] text-sm">道具</span>
-          <div className="flex flex-wrap gap-1 mt-1">
-            {player.items.map((item, idx) => (
-              <ItemBadge key={idx} item={item} />
-            ))}
-            {player.items.length === 0 && (
-              <span className="text-[#666]">无道具</span>
-            )}
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function ItemBadge({ item }: { item: string }) {
-  const itemLabels: Record<string, string> = {
-    'bandage': '[绷带]',
-    'powder': '[荧光粉]',
-    'extinguisher': '[灭火器]',
-    'rope': '[绳索]',
-    'ski': '[滑雪套装]'
-  };
-  
-  return (
-    <Badge variant="outline" className="border-[#d4a853] text-[#d4a853]">
-      {itemLabels[item] || item}
-    </Badge>
-  );
-}
-
-interface HostMapViewProps {
-  fireLocations: string[];
-  lightLocations: string[];
-  players: Player[];
-}
-
-function HostMapView({ fireLocations, lightLocations, players }: HostMapViewProps) {
-  const floors = [
-    { id: 'attic' as const, name: '阁楼', color: '#8b7355' },
-    { id: 'second' as const, name: '二楼', color: '#d4a853' },
-    { id: 'first' as const, name: '一楼', color: '#5bc0de' },
-    { id: 'basement' as const, name: '地下室', color: '#666' }
-  ];
-
-  return (
-    <Card className="bg-[#1a1a1a] border-[#d4a853]">
-      <CardHeader>
-        <CardTitle className="text-[#d4a853]">山庄地图</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="space-y-4">
-          {floors.map(floor => (
-            <FloorSection 
-              key={floor.id}
-              floor={floor}
-              fireLocations={fireLocations}
-              lightLocations={lightLocations}
-              players={players}
-            />
-          ))}
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-interface FloorSectionProps {
-  floor: { id: string; name: string; color: string };
-  fireLocations: string[];
-  lightLocations: string[];
-  players: Player[];
-}
-
-function FloorSection({ floor, fireLocations, lightLocations, players }: FloorSectionProps) {
-  const floorLocations = getLocationsByFloor(floor.id as any);
-  
-  return (
-    <div className="border border-[#444] rounded-lg p-3">
-      <div 
-        className="text-sm font-bold mb-2 px-2 py-1 rounded"
-        style={{ backgroundColor: floor.color + '33', color: floor.color }}
-      >
-        {floor.name}
-      </div>
-      <div className="grid grid-cols-4 gap-2">
-        {floorLocations.map(loc => (
-          <LocationCell 
-            key={loc.id}
-            location={loc}
-            isOnFire={fireLocations.includes(loc.id)}
-            isLit={lightLocations.includes(loc.id)}
-            playersHere={players.filter(p => p.currentLocation === loc.id)}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-interface LocationCellProps {
-  location: { id: string; name: string };
-  isOnFire: boolean;
-  isLit: boolean;
-  playersHere: Player[];
-}
-
-function LocationCell({ location, isOnFire, isLit, playersHere }: LocationCellProps) {
-  let borderClass = 'border-[#444] bg-[#2a2a2a]';
-  if (isOnFire) borderClass = 'border-[#c9302c] bg-[#c9302c22]';
-  if (isLit) borderClass = 'border-[#5bc0de] bg-[#5bc0de22]';
-  
-  return (
-    <div className={cn("p-2 rounded border text-center text-sm", borderClass)}>
-      <div className="text-[#f5f5f5] text-xs">{location.name}</div>
-      <div className="flex items-center justify-center gap-1 mt-1">
-        {isOnFire && <Flame className="w-3 h-3 text-[#c9302c]" />}
-        {isLit && <Lightbulb className="w-3 h-3 text-[#5bc0de]" />}
-      </div>
-      {playersHere.length > 0 && (
-        <div className="mt-1 text-[10px] text-[#d4a853]">
-          {playersHere.map(p => p.name).join(', ')}
-        </div>
-      )}
-    </div>
-  );
-}
-
-interface SettlementDetailProps {
-  settlement: any;
-  players: Player[];
-}
-
-function SettlementDetail({ settlement, players }: SettlementDetailProps) {
-  const healthChanges = settlement.healthChanges || [];
-  const overlappingPlayers = settlement.overlappingPlayers || [];
-  const exposedActionLines = settlement.exposedActionLines || [];
-  
-  return (
-    <div className="space-y-6">
-      <h3 className="text-lg font-bold text-[#d4a853] border-b border-[#444] pb-2">
-        完整结算信息（仅主持人可见）
-      </h3>
-      
-      <div>
-        <h4 className="text-[#d4a853] mb-2">生命变化</h4>
-        <div className="space-y-1">
-          {healthChanges.map((change: any, idx: number) => {
-            const player = players.find(p => p.id === change.playerId);
-            const changeClass = change.change < 0 ? 'text-[#c9302c]' : 'text-[#2ca02c]';
-            const bgClass = change.change < 0 ? 'bg-[#c9302c22]' : 'bg-[#2ca02c22]';
-            const sign = change.change > 0 ? '+' : '';
-            
-            return (
-              <div key={idx} className={cn("flex items-center justify-between p-2 rounded", bgClass)}>
-                <span className="text-[#f5f5f5]">{player?.name}</span>
-                <span className={changeClass}>
-                  {sign}{change.change} ({change.reason})
-                </span>
+          <>
+            {/* 实时玩家状态 */}
+            <section className="bg-[#1a1a1a] rounded-lg border border-[#333] overflow-hidden">
+              <div className="px-4 py-3 border-b border-[#333] flex items-center gap-2">
+                <Users className="w-5 h-5 text-[#d4a853]" />
+                <h2 className="text-lg font-bold text-[#d4a853]">实时玩家状态</h2>
+                <span className="text-sm text-[#666] ml-auto">{players.length}/10人</span>
               </div>
-            );
-          })}
-          {healthChanges.length === 0 && <span className="text-[#666]">无生命变化</span>}
-        </div>
-      </div>
-
-      <div>
-        <h4 className="text-[#d4a853] mb-2">亮灯地点重叠玩家</h4>
-        <div className="space-y-1">
-          {overlappingPlayers.map((overlap: any, idx: number) => {
-            const loc = getLocationById(overlap.locationId);
-            const playerNames = overlap.players
-              .map((pid: string) => players.find(p => p.id === pid)?.name)
-              .filter(Boolean)
-              .join(', ');
-            
-            return (
-              <div key={idx} className="p-2 bg-[#2a2a2a] rounded border border-[#444]">
-                <div className="text-[#5bc0de]">{loc?.name}</div>
-                <div className="text-sm text-[#aaaaaa]">{playerNames}</div>
+              <div className="p-4">
+               <PlayerStatusCards players={displayPlayers} onPlayerClick={handlePlayerClick} />
               </div>
-            );
-          })}
-          {overlappingPlayers.length === 0 && <span className="text-[#666]">无重叠玩家</span>}
-        </div>
-      </div>
+            </section>
 
-      {exposedActionLines.length > 0 && (
-        <div>
-          <h4 className="text-[#d4a853] mb-2">荧光粉暴露的行动线</h4>
-          {exposedActionLines.map((exposed: any, idx: number) => {
-            const player = players.find(p => p.id === exposed.playerId);
-            const fakeText = exposed.isFake ? '(编造)' : '';
-            
-            return (
-              <div key={idx} className="p-2 bg-[#2a2a2a] rounded border border-[#d4a853]">
-                <div className="text-[#f5f5f5] font-bold">{player?.name} {fakeText}</div>
-                <div className="text-sm text-[#aaaaaa] mt-1">
-                  {exposed.actionLine.map((step: any, i: number) => (
-                    <span key={i} className="inline-block mr-2">
-                      第{step.step}步:{getLocationById(step.locationId)?.name}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-interface PublicAnnouncementProps {
-  settlement: any;
-  players: Player[];
-  round: number;
-}
-
-function PublicAnnouncement({ settlement, players }: PublicAnnouncementProps) {
-  const fireDamage = settlement.fireDamage || [];
-  const overlappingPlayers = settlement.overlappingPlayers || [];
-  const healthChanges = settlement.healthChanges || [];
-  const exposedActionLines = settlement.exposedActionLines || [];
-  const voteResults = settlement.voteResults || [];
-  
-  const fireLocs = fireDamage.map((d: any) => d.locationId);
-  const uniqueFireLocs = [...new Set(fireLocs)] as string[];
-  
-  const healthChangedPlayers = healthChanges.filter((c: any) => c.change !== 0);
-  const eliminatedPlayers = players.filter(p => !p.isAlive);
-
-  return (
-    <div className="space-y-6">
-      <h3 className="text-lg font-bold text-[#5bc0de] border-b border-[#444] pb-2">
-        公示信息（可展示给玩家）
-      </h3>
-      
-      <div className="p-3 bg-[#c9302c22] rounded border border-[#c9302c]">
-        <h4 className="text-[#c9302c] font-bold mb-2 flex items-center">
-          <Flame className="w-4 h-4 mr-1" />
-          着火地点预告（下一轮）
-        </h4>
-        {uniqueFireLocs.length > 0 ? (
-          <div className="text-[#f5f5f5]">
-            以下地点将在下一轮着火：
-            <div className="flex flex-wrap gap-2 mt-2">
-              {uniqueFireLocs.map((locId, idx) => (
-                <Badge key={idx} variant="outline" className="border-[#c9302c] text-[#c9302c]">
-                  {getLocationById(locId)?.name}
-                </Badge>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <span className="text-[#aaaaaa]">本轮无新的着火地点</span>
+            {/* 轮次信息选项卡 - 传入历史数据 */}
+            <section className="bg-[#1a1a1a] rounded-lg border border-[#333] overflow-hidden min-h-[600px]">
+              <RoundTabsPanel 
+                gameState={store as GameState} 
+                currentRound={round}
+                roundHistories={effectiveHistories}
+              />
+            </section>
+          </>
         )}
-      </div>
+      </main>
 
-      <div className="p-3 bg-[#5bc0de22] rounded border border-[#5bc0de]">
-        <h4 className="text-[#5bc0de] font-bold mb-2 flex items-center">
-          <Lightbulb className="w-4 h-4 mr-1" />
-          亮灯地点重叠公告
-        </h4>
-        {overlappingPlayers.length > 0 ? (
-          <div className="space-y-2">
-            {overlappingPlayers.map((overlap: any, idx: number) => {
-              const loc = getLocationById(overlap.locationId);
-              return (
-                <div key={idx} className="text-[#f5f5f5]">
-                  <span className="text-[#5bc0de]">{loc?.name}</span> 
-                  有 {overlap.players.length} 名玩家同时出现
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <span className="text-[#aaaaaa]">本轮无亮灯地点重叠</span>
-        )}
-      </div>
-
-      <div className="p-3 bg-[#2a2a2a] rounded border border-[#444]">
-        <h4 className="text-[#d4a853] font-bold mb-2 flex items-center">
-          <Heart className="w-4 h-4 mr-1" />
-          生命变化公告
-        </h4>
-        {healthChangedPlayers.length > 0 ? (
-          <div className="space-y-1">
-            {healthChangedPlayers.map((change: any, idx: number) => {
-              const player = players.find(p => p.id === change.playerId);
-              const changeClass = change.change < 0 ? 'text-[#c9302c]' : 'text-[#2ca02c]';
-              const bgClass = change.change < 0 ? 'bg-[#c9302c11]' : 'bg-[#2ca02c11]';
-              const sign = change.change > 0 ? '+' : '';
-              
-              return (
-                <div key={idx} className={cn("flex items-center justify-between p-2 rounded", bgClass)}>
-                  <span className="text-[#f5f5f5]">{player?.name}</span>
-                  <span className={changeClass}>
-                    {sign}{change.change} 生命
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <span className="text-[#aaaaaa]">本轮无生命变化</span>
-        )}
-      </div>
-
-      {eliminatedPlayers.length > 0 && (
-        <div className="p-3 bg-[#444] rounded border border-[#666]">
-          <h4 className="text-[#666] font-bold mb-2 flex items-center">
-            <Skull className="w-4 h-4 mr-1" />
-            出局公告
-          </h4>
-          <div className="text-[#f5f5f5]">
-            以下玩家在本轮出局：
-            <div className="flex flex-wrap gap-2 mt-2">
-              {eliminatedPlayers.map((player, idx) => (
-                <Badge key={idx} variant="outline" className="border-[#666] text-[#aaaaaa]">
-                  {player.name}
-                </Badge>
-              ))}
-            </div>
-          </div>
-        </div>
+      {/* 弹窗 */}
+      {showPlayerAdmin && (
+        <PlayerAdminPanel
+          isOpen={showPlayerAdmin}
+          onClose={() => { setShowPlayerAdmin(false); setSelectedPlayer(null); }}
+          players={players}
+          selectedPlayer={selectedPlayer}
+        />
       )}
 
-      {exposedActionLines.length > 0 && (
-        <div className="p-3 bg-[#d4a85322] rounded border border-[#d4a853]">
-          <h4 className="text-[#d4a853] font-bold mb-2">[荧光粉] 暴露</h4>
-          {exposedActionLines.map((exposed: any, idx: number) => {
-            const player = players.find(p => p.id === exposed.playerId);
-            return (
-              <div key={idx} className="text-[#f5f5f5]">
-                <span className="text-[#d4a853] font-bold">{player?.name}</span> 
-                的行动线已被暴露！
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {voteResults.length > 0 && (
-        <div className="p-3 bg-[#2ca02c22] rounded border border-[#2ca02c]">
-          <h4 className="text-[#2ca02c] font-bold mb-2">[投票] 投凶结果</h4>
-          <div className="text-[#f5f5f5]">
-            本轮共有 {voteResults.length} 名玩家参与投凶
-          </div>
-        </div>
+      {showGameReview && (
+        <GameReviewDialog
+          isOpen={showGameReview}
+          onClose={() => setShowGameReview(false)}
+          gameState={store as GameState}
+          onReset={handleResetGame}
+        />
       )}
     </div>
   );

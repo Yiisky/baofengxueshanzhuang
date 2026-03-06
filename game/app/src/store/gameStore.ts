@@ -3,13 +3,32 @@ import type {
   GameState, 
   Player, 
   Role, 
-  Camp, 
+  // Camp,  // 暂时移除，使用字符串
   ActionStep, 
   ItemType,
   SettlementInfo,
   TradeRequest,
-  GameHistory
+  // GameHistory  // 暂时移除，内联定义
 } from '@/types/game';
+
+// 临时类型定义
+type Camp = 'killer' | 'detective' | 'neutral';
+
+interface GameHistory {
+  id: string;
+  roomCode: string;
+  startTime: number;
+  endTime: number;
+  players: Array<{
+    name: string;
+    role: string;
+    camp: string;
+    score: number;
+    isAlive: boolean;
+  }>;
+  winner: string;
+  rounds: number;
+}
 import { locations } from '@/data/locations';
 import { defaultRoleDistribution, getRoleConfig } from '@/data/roles';
 
@@ -29,24 +48,27 @@ function createPlayer(name: string, role: Role, index: number): Player {
   return {
     id: generateId(),
     name: name || `玩家${index + 1}`,
+    number: index + 1, 
     role,
     camp: roleConfig?.camp || 'neutral',
     health: 3,
     maxHealth: 3,
     actionPoints: 8,
     currentLocation: '',
+    locationId: '', // 修复：添加缺失的 locationId
     actionLine: [],
     items: [],
     score: roleConfig?.initialScore || 0,
     isAlive: true,
     isExposed: false,
     visitedLocations: [],
-    canUseSkill: true,
     skillUsedThisRound: false,
     fakeActionLineCount: role === 'killer' ? 2 : 0,
     fireCount: role === 'accomplice' ? 2 : 0,
     hasCheckedFan: false,
-    totalVotesCorrect: 0
+    totalVotesCorrect: 0,
+    votesThisRound: null,
+    fanJoinedCamp: undefined // 初始化
   };
 }
 
@@ -61,7 +83,7 @@ const initialState: GameState = {
   fireLocations: [],
   lightLocations: [],
   currentPlayerIndex: 0,
-  votes: new Map(),
+  votes: {} as Record<string, string>,  // 改为Record类型
   voteRecords: [],
   tradeRequests: [],
   settings: {
@@ -74,6 +96,15 @@ const initialState: GameState = {
 let globalState: GameState = { ...initialState };
 let listeners: (() => void)[] = [];
 let gameHistories: GameHistory[] = [];
+
+// 关键修复：标记是否使用 WebSocket 模式（外部控制）
+let useWebSocketMode = false;
+
+// 设置 WebSocket 模式
+export function setWebSocketMode(enabled: boolean) {
+  useWebSocketMode = enabled;
+  console.log('[GameStore] WebSocket 模式:', enabled);
+}
 
 function notifyListeners() {
   listeners.forEach(listener => listener());
@@ -125,16 +156,22 @@ export function useGameStore() {
   // ========== 游戏配置 ==========
 
   // 创建新游戏（主持人）
-  const createGame = useCallback((hostId: string) => {
-    globalState = { 
-      ...initialState,
-      id: generateId(),
-      roomCode: generateRoomCode(),
-      hostId
-    };
-    notifyListeners();
-    return globalState.roomCode;
-  }, []);
+const createGame = useCallback((hostId: string) => {
+  // 关键修复：WebSocket 模式下不创建本地游戏
+  if (useWebSocketMode) {
+    console.log('[GameStore] WebSocket 模式，跳过本地创建');
+    return '';
+  }
+  
+  globalState = { 
+    ...initialState,
+    id: generateId(),
+    roomCode: generateRoomCode(),
+    hostId
+  };
+  notifyListeners();
+  return globalState.roomCode;
+}, []);
 
   // 加入游戏
   const joinGame = useCallback((roomCode: string) => {
@@ -177,7 +214,8 @@ export function useGameStore() {
       ...globalState, 
       phase: 'action',
       round: 1,
-      gameStartTime: Date.now(),
+      // 使用类型断言添加动态属性
+      ...( { gameStartTime: Date.now() } as any ),
       roundStartTime: Date.now()
     };
     notifyListeners();
@@ -207,7 +245,7 @@ export function useGameStore() {
     const { round } = globalState;
     
     // 保存本轮投票记录
-    globalState.votes.forEach((targetId, voterId) => {
+    Object.entries(globalState.votes).forEach(([voterId, targetId]) => {
       const killer = globalState.players.find(p => p.role === 'killer');
       const isCorrect = targetId === killer?.id;
       
@@ -238,7 +276,7 @@ export function useGameStore() {
       detectiveTarget: undefined,
       hackerTarget: undefined,
       engineerRepaired: undefined,
-      votes: new Map(),
+      votes: {} as Record<string, string>,
       tradeRequests: []
     };
 
@@ -271,9 +309,9 @@ export function useGameStore() {
       .filter(p => p.camp === 'detective' && p.isAlive)
       .reduce((sum, p) => sum + p.score, 0);
 
-    globalState.winner = killerScore >= detectiveScore ? 'killer' : 'detective';
+    (globalState as any).winner = killerScore >= detectiveScore ? 'killer' : 'detective';
     globalState.phase = 'ended';
-    globalState.gameEndTime = Date.now();
+    (globalState as any).gameEndTime = Date.now();
 
     saveGameHistory(globalState);
   }
@@ -550,7 +588,8 @@ export function useGameStore() {
 
   // 投凶
   const vote = useCallback((voterId: string, targetId: string) => {
-    globalState.votes.set(voterId, targetId);
+    // 修复：votes 是 Record 类型，不是 Map
+    (globalState.votes as any)[voterId] = targetId;
     
     // 更新玩家本轮投票
     globalState.players = globalState.players.map(p => {
@@ -568,7 +607,7 @@ export function useGameStore() {
     const killer = globalState.players.find(p => p.role === 'killer');
     const results: { voterId: string; targetId: string; isCorrect: boolean }[] = [];
 
-    globalState.votes.forEach((targetId, voterId) => {
+      Object.entries(globalState.votes).forEach(([voterId, targetId]) => {
       results.push({
         voterId,
         targetId,
@@ -750,7 +789,7 @@ export function useGameStore() {
     }
 
     // 6. 投票结果
-    votes.forEach((targetId, voterId) => {
+    Object.entries(votes).forEach(([voterId, targetId]) => {
       const killer = players.find(p => p.role === 'killer');
       settlement.voteResults.push({
         voterId,
@@ -838,6 +877,7 @@ export function useGameStore() {
   return {
     ...globalState,
     createGame,
+    setWebSocketMode, // 导出设置函数
     joinGame,
     setGameConfig,
     setPlayerRole,

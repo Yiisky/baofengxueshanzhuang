@@ -1,12 +1,22 @@
 // src/types/game.ts
 /**
  * 游戏核心类型定义
- * 适配 websocketStore.ts 和 PlayerPanel.tsx 的完整类型声明
  */
-
 // ====================== 基础枚举/类型 ======================
 /** 楼层类型 */
-export type Floor = 'attic' | 'second' | 'first' | 'basement';
+export type Floor = 'attic' | 'second' | 'first' | 'basement'; // 修正拼写 basement
+
+/** 角色配置类型 */
+export interface RoleConfig {
+  role: RoleType;
+  name: string;
+  description: string;
+  camp: CampType;
+  initialScore: number;
+  skillName: string;
+  skillDescription: string;
+  maxUses: number;
+}
 
 /** 地点类型 */
 export type LocationType = 'normal' | 'special' | 'crime' | 'garden';
@@ -14,34 +24,36 @@ export type LocationType = 'normal' | 'special' | 'crime' | 'garden';
 /** 道具类型 */
 export type ItemType = 'bandage' | 'powder' | 'extinguisher' | 'rope' | 'ski';
 
-/** 角色类型 - 完整版（包含服务器所有角色） */
+/** 角色类型 - 完整版 */
 export type RoleType = 
   | 'detective'    // 侦探
   | 'killer'       // 凶手
   | 'murderer'     // 凶手（别名）
   | 'accomplice'   // 帮凶
-  | 'bad_fan'      // 坏粉丝
-  | 'good_fan'     // 好粉丝
+  | 'bad_fan'      // 坏推理迷
+  | 'good_fan'     // 好推理迷
   | 'doctor'       // 医生
   | 'engineer'     // 工程师
   | 'hacker'       // 黑客
-  | 'innocent';    // 平民/粉丝
+  | 'fan'          // 推理迷（未转变）
+  | 'unknown'      // 未分配身份
+  | 'innocent';    // 平民
 
 /** 角色类型 - 别名（兼容旧代码） */
 export type Role = RoleType;
 
-/** 阵营类型 - 完整版 */
+/** 阵营类型 */
 export type CampType = 
-  | 'good'       // 好人阵营
-  | 'detective'  // 侦探阵营（服务器使用）
-  | 'evil'       // 坏人阵营
-  | 'killer'     // 凶手阵营（服务器使用）
-  | 'neutral';   // 中立阵营
+  | 'good'       
+  | 'detective'  
+  | 'evil'       
+  | 'killer'     
+  | 'neutral';   
 
-/** 游戏步骤类型 - 用于PlayerPanel（字符串类型） */
-export type ActionStep = 'move' | 'useItem' | 'vote' | 'skill';
+/** 游戏阶段类型 */
+export type Phase = 'lobby' | 'config' | 'action' | 'free' | 'settlement' | 'ended';
 
-/** 行动步骤详情 - 用于websocketStore（对象类型） */
+/** 行动步骤详情 */
 export interface ActionStepDetail {
   step: number;
   locationId: string;
@@ -49,13 +61,6 @@ export interface ActionStepDetail {
   cost?: number;
 }
 
-/** 游戏阶段类型 - 用于websocketStore */
-export type Phase = 'lobby' | 'config' | 'action' | 'free' | 'settlement' | 'ended';
-
-/** 游戏状态类型 - 用于PlayerPanel（简单状态） */
-export type GameStateSimple = 'waiting' | 'playing' | 'ended';
-
-// ====================== 核心接口 ======================
 /** 地点接口 */
 export interface Location {
   id: string;
@@ -66,53 +71,50 @@ export interface Location {
   description: string;
 }
 
-/** 玩家接口 - 完整版（兼容 PlayerPanel 和 websocketStore） */
+/** 玩家接口 */
 export interface Player {
-  /** 玩家唯一标识 */
   id: string;
-  /** 玩家名称（如"1号玩家"） */
   name: string;
-  /** 角色类型 */
+  number: number; // ✅ 添加：玩家编号 1-10
   role: RoleType;
-  /** 阵营类型 */
   camp: CampType;
-  /** 生命值 */
   health: number;
-  /** 最大生命值 */
   maxHealth: number;
-  /** 行动点数 */
   actionPoints: number;
-  /** 当前所在地点ID（服务器字段） */
   currentLocation: string;
-  /** 当前所在地点ID（PlayerPanel兼容字段） */
   locationId: string;
-  /** 行动线 */
   actionLine: ActionStepDetail[];
-  /** 假行动线（凶手用） */
   fakeActionLine?: ActionStepDetail[];
-  /** 道具列表 */
   items: ItemType[];
-  /** 分数 */
   score: number;
-  /** 是否存活 */
   isAlive: boolean;
-  /** 是否暴露 */
   isExposed: boolean;
-  /** 已访问地点 */
   visitedLocations: string[];
-  /** 本轮是否使用技能 */
   skillUsedThisRound: boolean;
-  /** 假行动线数量（凶手） */
-  fakeActionLineCount?: number;
-  /** 放火次数（帮凶） */
-  fireCount?: number;
-  /** 是否检查过迷药 */
-  hasCheckedFan?: boolean;
-  /** 正确投票次数 */
-  totalVotesCorrect?: number;
-  /** 本轮投票目标 */
+  fakeActionLineCount: number;
+  fireCount: number;
+  hasCheckedFan: boolean;
+  totalVotesCorrect: number;
   votesThisRound?: string | null;
-  /** WebSocket连接（不序列化） */
+  
+  // 新增/补全字段以解决报错
+  fanJoinedCamp?: CampType;
+  
+  // 其他扩展字段
+  hasCheckedOthersScore?: boolean;
+  transformedRole?: RoleType;
+  isFan?: boolean;
+  skillUseCount?: number;
+  fanChoiceRound?: number;
+  fanTargetId?: string;
+  fanTargetRole?: RoleType;
+  fanSkillChoice?: 'action_line' | 'vote_2' | 'attack_fake' | 'vote_1';
+  canVote?: boolean;
+  
+  // 虚弱状态相关字段
+  isWeakened?: boolean;           // 是否处于虚弱状态
+  itemsObtainedThisRound?: ItemType[]; // 本轮已获取的道具
+  
   ws?: any;
 }
 
@@ -133,7 +135,7 @@ export interface GameSettings {
   timeLimit: number;
 }
 
-/** 游戏状态接口 - 用于websocketStore（完整对象） */
+/** 游戏状态接口 */
 export interface GameState {
   id: string;
   roomCode: string;
@@ -148,12 +150,70 @@ export interface GameState {
   voteRecords: any[];
   tradeRequests: TradeRequest[];
   settings: GameSettings;
-  /** 可选：迷药目标 */
   powderTarget?: string;
-  /** 可选：侦探目标 */
   detectiveTarget?: string;
-  /** 可选：主持人ID */
   hostId?: string;
+  
+  // 补全缺失的动态属性以解决 TS2339 错误
+  gameStartTime?: number;
+  winner?: CampType | string;
+  hackerTarget?: string;
+  engineerRepaired?: string;
+  fanChecked?: { playerId: string; role: RoleType };
+  roundStartTime?: number;
+  
+  // 原有扩展字段
+  skillRecords?: Array<{
+    playerId: string;
+    skillType: string;
+    targetId?: string;
+    locationId?: string;
+    round: number;
+    timestamp: number;
+  }>;
+  hackerChecks?: Map<string, boolean>;
+  fanTransformed?: boolean;
+  
+  // 轮次历史记录
+  roundHistories?: RoundHistory[];
+}
+
+/** 轮次历史记录 */
+export interface RoundHistory {
+  round: number;
+  phase: Phase;
+  players: Player[];
+  fireLocations: string[];
+  lightLocations: string[];
+  votes: Record<string, string>;
+  powderTarget: string | null;
+  timestamp: number;
+  settlementResult?: SettlementResult;
+}
+
+/** 结算结果 */
+export interface SettlementResult {
+  healthChanges: Array<{
+    playerId: string;
+    playerName: string;
+    change: number;
+    reason: string;
+  }>;
+  attackDamage: Array<{
+    playerId: string;
+    attackerId: string;
+    attackerName: string;
+  }>;
+  healEffects: Array<{
+    playerId: string;
+    healerId: string;
+    healerName: string;
+  }>;
+  fireDamage: Array<{
+    playerId: string;
+    locationId: string;
+    locationName: string;
+  }>;
 }
 
 /** 结算信息接口 */
@@ -194,26 +254,18 @@ export interface SettlementInfo {
   }>;
 }
 
-/** 投票记录接口 */
-export interface VoteRecord {
-  voterId: string;
-  targetId: string;
-  timestamp: number;
-}
-
-/** 游戏房间接口 - 简化版 */
+/** 游戏房间接口 */
 export interface GameRoom {
   roomId: string;
   roomCode: string;
-  state: GameStateSimple;
-  currentStep: ActionStep;
+  state: 'waiting' | 'playing' | 'ended';
+  currentStep: 'move' | 'useItem' | 'vote' | 'skill';
   players: Player[];
-  voteRecords: VoteRecord[];
+  voteRecords: any[];
   round: number;
   createTime: number;
 }
 
-// ====================== WebSocket 相关类型 ======================
 /** WebSocket 消息类型 */
 export type WsMessageType = 
   | 'CONNECTED'
@@ -230,7 +282,13 @@ export type WsMessageType =
   | 'TRADE_CREATED'
   | 'NOTIFICATION'
   | 'ERROR'
-  | 'PONG';
+  | 'PONG'
+  | 'SKILL_USED'
+  | 'FAKE_ACTION_LINE_SET'
+  | 'FAN_TRANSFORMED'
+  | 'FAN_SKILL_CHOSEN'
+  | 'ACTION_LINE_REVEALED'
+  | 'VOTE_UPDATED';
 
 /** WebSocket 消息结构 */
 export interface WsMessage {
@@ -254,32 +312,10 @@ export interface WsMessage {
   targetId?: string;
   senderId?: string;
   timestamp?: number;
+  effect?: any;
+  actionLine?: ActionStepDetail[];
 }
 
-/** WebSocket Store 接口 */
-export interface WebSocketStore {
-  players: Player[];
-  gameState: GameStateSimple;
-  currentStep: ActionStep;
-  roomInfo?: GameRoom;
-  isConnected: boolean;
-  vote: (voterId: string, targetId: string) => void;
-  move: (playerId: string, locationId: string) => void;
-  useItem: (playerId: string, itemType: ItemType, targetId?: string) => void;
-  sendMessage: (message: WsMessage | any) => void;
-}
-
-// ====================== 工具类型 ======================
-/** 提取接口属性类型 */
-export type ExtractPropertyType<T, K extends keyof T> = T[K];
-
-/** 地点ID类型 */
-export type LocationId = ExtractPropertyType<Location, 'id'>;
-
-/** 玩家ID类型 */
-export type PlayerId = ExtractPropertyType<Player, 'id'>;
-
-// ====================== 常量枚举 ======================
 /** 角色名称映射 */
 export const RoleNameMap: Record<RoleType, string> = {
   detective: '侦探',
@@ -287,11 +323,13 @@ export const RoleNameMap: Record<RoleType, string> = {
   murderer: '凶手',
   innocent: '平民',
   accomplice: '帮凶',
-  bad_fan: '坏粉丝',
-  good_fan: '好粉丝',
+  bad_fan: '坏推理迷',
+  good_fan: '好推理迷',
   doctor: '医生',
   engineer: '工程师',
-  hacker: '黑客'
+  hacker: '黑客',
+  fan: '推理迷',
+  unknown: '未知身份', 
 };
 
 /** 阵营颜色映射 */
@@ -316,21 +354,45 @@ export const ItemNameMap: Record<ItemType, string> = {
 export const DefaultPlayer: Player = {
   id: '',
   name: '',
-  role: 'innocent',
-  camp: 'good',
+  number: 0, 
+  role: 'unknown',
+  camp: 'neutral',
   health: 3,
   maxHealth: 3,
   actionPoints: 8,
   currentLocation: '',
-  locationId: '',
+  locationId: '', // 补全
   actionLine: [],
   items: [],
   score: 0,
   isAlive: true,
   isExposed: false,
   visitedLocations: [],
-  skillUsedThisRound: false
+  skillUsedThisRound: false,
+  fakeActionLineCount: 0,
+  fireCount: 0,
+  hasCheckedFan: false,
+  totalVotesCorrect: 0,
+  votesThisRound: null,
+  
+  // 新增字段
+  fanJoinedCamp: undefined,
+  hasCheckedOthersScore: false,
+  transformedRole: undefined,
+  isFan: false,
+  skillUseCount: 0,
+  fanChoiceRound: undefined,
+  fanTargetId: undefined,
+  fanTargetRole: undefined,
+  fanSkillChoice: undefined,
+  canVote: true,
+  
+  // 虚弱状态相关字段
+  isWeakened: false,
+  itemsObtainedThisRound: []
 };
+
+export type ActionStep = ActionStepDetail; 
 
 /** 默认游戏状态配置 */
 export const DefaultGameState: GameState = {
@@ -349,17 +411,8 @@ export const DefaultGameState: GameState = {
   settings: {
     allowRoleReveal: false,
     timeLimit: 0
-  }
-};
-
-/** 默认游戏房间配置 */
-export const DefaultGameRoom: GameRoom = {
-  roomId: '',
-  roomCode: '',
-  state: 'waiting',
-  currentStep: 'move',
-  players: [],
-  voteRecords: [],
-  round: 1,
-  createTime: Date.now()
+  },
+  skillRecords: [],
+  hackerChecks: new Map(),
+  roundHistories: []
 };

@@ -1,6 +1,6 @@
-[?? 2026/02/25 16:33:12.56] Start 
+[?? 2026/03/06 12:42:47.83] Start 
 
-up to date, audited 31 packages in 3s
+up to date, audited 31 packages in 2s
 
 4 packages are looking for funding
   run `npm fund` for details
@@ -12,12 +12,12 @@ To address all issues, run:
 
 Run `npm audit` for details.
 
-up to date, audited 481 packages in 6s
+up to date, audited 481 packages in 5s
 
 68 packages are looking for funding
   run `npm fund` for details
 
-3 vulnerabilities (2 moderate, 1 high)
+4 vulnerabilities (2 moderate, 2 high)
 
 To address all issues, run:
   npm audit fix

@@ -42,6 +42,20 @@ export function useWebSocket(url: string): UseWebSocketReturn {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isManualCloseRef = useRef(false);
   const listenerRef = useRef<((message: any) => void) | null>(null);
+  
+  // 新增：标记是否是主持人重连
+  const isHostReconnectRef = useRef(false);
+  
+  // 检查是否是主持人
+  const checkIsHost = useCallback(() => {
+    try {
+      const savedIsHost = localStorage.getItem('isHost') === 'true';
+      const savedHostId = localStorage.getItem('hostPlayerId');
+      return savedIsHost && !!savedHostId;
+    } catch (e) {
+      return false;
+    }
+  }, []);
 
   const clearTimers = useCallback(() => {
     if (heartbeatTimerRef.current) {
@@ -72,6 +86,24 @@ export function useWebSocket(url: string): UseWebSocketReturn {
       console.log('[WebSocket] 使用已有连接:', url);
       wsRef.current = globalWs;
       setIsConnected(globalWs.readyState === WebSocket.OPEN);
+      
+      // 关键修复：如果已经连接，立即检查是否需要重连
+      if (globalWs.readyState === WebSocket.OPEN && checkIsHost() && !isHostReconnectRef.current) {
+        console.log('[WebSocket] 检测到主持人且连接已打开，自动发送重连');
+        isHostReconnectRef.current = true;
+        const savedRoomCode = localStorage.getItem('roomCode');
+        const savedHostId = localStorage.getItem('hostPlayerId');
+        if (savedRoomCode && savedHostId) {
+          setTimeout(() => {
+            sendMessage({ 
+              type: 'RECONNECT_HOST', 
+              roomCode: savedRoomCode, 
+              hostPlayerId: savedHostId 
+            });
+          }, 300);
+        }
+      }
+      
       return;
     }
 
@@ -83,6 +115,9 @@ export function useWebSocket(url: string): UseWebSocketReturn {
 
     console.log('[WebSocket] 创建新连接:', url);
     setError(null);
+    
+    // 重置主持人重连标记
+    isHostReconnectRef.current = false;
 
     try {
       const ws = new WebSocket(url);
@@ -95,6 +130,44 @@ export function useWebSocket(url: string): UseWebSocketReturn {
         setIsConnected(true);
         setError(null);
         reconnectAttemptsRef.current = 0;
+
+        // 关键修复：连接成功后，立即从 localStorage 恢复 playerId 并发送重连
+        const savedRoomCode = localStorage.getItem('roomCode');
+        const savedPlayerId = localStorage.getItem('myPlayerId');
+        const savedHostId = localStorage.getItem('hostPlayerId');
+        const savedIsHost = localStorage.getItem('isHost') === 'true';
+        
+        console.log('[WebSocket] 连接成功，检查本地存储:', { 
+          savedRoomCode, 
+          savedPlayerId: savedPlayerId?.slice(0,6), 
+          savedHostId: savedHostId?.slice(0,6),
+          savedIsHost 
+        });
+
+        // 如果是主持人，立即发送重连消息
+        if (savedIsHost && savedHostId && savedRoomCode) {
+          console.log('[WebSocket] 检测到主持人，发送重连');
+          isHostReconnectRef.current = true;
+          setTimeout(() => {
+            sendMessage({ 
+              type: 'RECONNECT_HOST', 
+              roomCode: savedRoomCode, 
+              hostPlayerId: savedHostId 
+            });
+          }, 300);
+        } 
+        // 如果是普通玩家，发送 JOIN_ROOM 重连
+        else if (savedRoomCode && savedPlayerId) {
+          console.log('[WebSocket] 检测到普通玩家，发送重连');
+          setTimeout(() => {
+            sendMessage({
+              type: 'JOIN_ROOM',
+              roomCode: savedRoomCode,
+              playerId: savedPlayerId,
+              isReconnect: true
+            });
+          }, 300);
+        }
 
         heartbeatTimerRef.current = setInterval(() => {
           sendMessage({ type: 'PING' });
@@ -139,7 +212,7 @@ export function useWebSocket(url: string): UseWebSocketReturn {
       console.error('[WebSocket] 创建连接失败:', err);
       setError('创建连接失败');
     }
-  }, [url, sendMessage, clearTimers]);
+  }, [url, sendMessage, clearTimers, checkIsHost]);
 
   const reconnect = useCallback(() => {
     console.log('[WebSocket] 手动重连');

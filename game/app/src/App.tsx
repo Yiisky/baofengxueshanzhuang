@@ -184,7 +184,7 @@ useEffect(() => {
           </h1>
           
           <p className="text-[#aaaaaa] text-center text-sm mb-8">
-            10人阵营对抗 · 5轮推理博弈
+            《大侦探 第十一季》先导片同款游戏
           </p>
           
           {isRestoringSession && (

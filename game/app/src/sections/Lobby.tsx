@@ -37,7 +37,21 @@ const roleNames: Record<string, string> = {
  * 功能：显示游戏配置界面，包括玩家列表、身份分配说明、开始游戏按钮
  */
 export function Lobby() {
-  const { players, startGame, roomCode } = useWebSocketStore();
+  const { players, startGame, roomCode, myHostId, myPlayerId } = useWebSocketStore();
+  
+  // 如果是主持人，不显示玩家大厅，而是显示主持人面板或加载状态
+  const isHost = !!myHostId && myHostId === myPlayerId;
+  
+  if (isHost) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a]">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#d4a853] mx-auto mb-4" />
+          <p className="text-[#d4a853]">正在恢复主持人状态...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div 

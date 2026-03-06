@@ -1,0 +1,65 @@
+/* src/styles/roomFragments.css */
+
+/* 基础动画 */
+@keyframes pulse-fire {
+  0%, 100% { 
+    opacity: 1; 
+    transform: scale(1);
+  }
+  50% { 
+    opacity: 0.8; 
+    transform: scale(1.02);
+  }
+}
+
+@keyframes pulse-available {
+  0%, 100% { 
+    border-color: rgba(212, 168, 83, 0.4);
+    box-shadow: 0 0 10px rgba(212, 168, 83, 0.2);
+  }
+  50% { 
+    border-color: rgba(212, 168, 83, 0.8);
+    box-shadow: 0 0 20px rgba(212, 168, 83, 0.4);
+  }
+}
+
+@keyframes bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+
+@keyframes flicker {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* 房间悬停效果 */
+.room-fragment:hover {
+  transform: scale(1.05) !important;
+  z-index: 25 !important;
+  filter: brightness(1.2);
+}
+
+/* 燃烧动画 */
+.animate-flicker {
+  animation: flicker 0.5s infinite;
+}
+
+/* 响应式调整 */
+@media (max-width: 768px) {
+  .room-fragment {
+    border-width: 1px !important;
+  }
+  .room-content span {
+    font-size: 8px !important;
+  }
+}
+
+/* 特殊形状裁剪 */
+.room-shape-trapezoid {
+  clip-path: polygon(0 0, 100% 5%, 95% 100%, 5% 95%);
+}
+
+.room-shape-l-shape {
+  clip-path: polygon(0 0, 70% 0, 70% 40%, 100% 40%, 100% 100%, 0 100%);
+}
